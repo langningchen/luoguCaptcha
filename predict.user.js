@@ -46,30 +46,21 @@ const predictServer = 'https://luogu.cyezoi.com';
             for (const node of nodes) {
                 if (node.nodeName === 'IMG' && node.src.includes('captcha')) {
                     const imageElement = node;
-                    if (location.pathname === '/image') {
-                        const inputElement = imageElement.parentElement.nextSibling;
-                        const submitElement = inputElement.parentElement.nextSibling.firstElementChild;
-                        imageElement.onload = async () => {
-                            inputElement.value = await predict(imageElement);
-                            submitElement.click();
-                        };
+                    const inputs = document.getElementsByTagName('input');
+                    var inputElement = null;
+                    for (const input of inputs) {
+                        if (input.placeholder.includes("验证码")) {
+                            inputElement = input;
+                            break;
+                        }
                     }
-                    else if (location.pathname === '/auth/login') {
-                        const inputElement = imageElement.parentElement.previousElementSibling.firstElementChild
-                        imageElement.onload = async () => {
-                            inputElement.value = await predict(imageElement);
-                            inputElement.dispatchEvent(new Event('input'));
-                        };
-                    }
-                    else if (location.pathname.startsWith('/discuss/')) {
-                        const inputElement = imageElement.parentElement.previousElementSibling;
-                        imageElement.onload = async () => {
-                            inputElement.value = await predict(imageElement);
-                            inputElement.dispatchEvent(new Event('input'));
-                        };
+                    if (!inputElement) {
+                        alert("找不到验证码输入框");
                     }
                     else {
-                        alert('Unknown page');
+                        imageElement.onload = async () => {
+                            inputElement.value = await predict(imageElement);
+                        };
                     }
                 }
             }
