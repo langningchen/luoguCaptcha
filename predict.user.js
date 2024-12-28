@@ -9,7 +9,7 @@
 // @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
-const predictServer = 'http://localhost:5000';
+const predictServer = 'https://luogu.cyezoi.com';
 
 (() => {
     window.predict = async (imageElement) => {
