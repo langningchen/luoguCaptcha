@@ -60,6 +60,7 @@ const predictServer = 'https://luogu.cyezoi.com';
                     else {
                         imageElement.onload = async () => {
                             inputElement.value = await predict(imageElement);
+                            inputElement.dispatchEvent(new InputEvent("input"))
                         };
                     }
                 }
