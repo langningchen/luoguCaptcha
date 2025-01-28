@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Captcha predict
 // @namespace    https://github.com/langningchen
-// @version      v0.0.1
+// @version      v0.0.2
 // @description  Predict the captcha of Luogu
 // @author       langningchen
 // @match        *://www.luogu.com.cn/*
@@ -60,7 +60,8 @@ const predictServer = 'https://luogu.cyezoi.com';
                     else {
                         imageElement.onload = async () => {
                             inputElement.value = await predict(imageElement);
-                            inputElement.dispatchEvent(new InputEvent("input"))
+                            inputElement.dispatchEvent(new Event('input', { bubbles: true }));
+                            inputElement.dispatchEvent(new Event('change', { bubbles: true }));
                         };
                     }
                 }
