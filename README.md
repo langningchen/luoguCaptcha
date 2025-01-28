@@ -4,8 +4,6 @@
 
 Recognize [Luogu Captcha](https://www.luogu.com.cn/lg4/captcha) with AI model
 
-Example: ![Luogu Captcha Example](https://www.luogu.com.cn/lg4/captcha)
-
 ## Usage
 
 1. Make sure you have [Tampermonkey](https://www.tampermonkey.net/) or other userscript managers installed in your browser.
