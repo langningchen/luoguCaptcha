@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Captcha predict
 // @namespace    https://github.com/langningchen
-// @version      v0.0.2
+// @version      v0.0.3
 // @description  Predict the captcha of Luogu
 // @author       langningchen
 // @match        *://www.luogu.com.cn/*
 // @icon         https://www.luogu.com.cn/favicon.ico
 // @grant        GM_xmlhttpRequest
+// @updateURL    https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js
+// @downloadURL  https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js
 // ==/UserScript==
 
 const predictServer = 'https://luogu.cyezoi.com';
