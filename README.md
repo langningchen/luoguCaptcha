@@ -6,10 +6,10 @@ Recognize [Luogu Captcha](https://www.luogu.com.cn/lg4/captcha) with AI model
 
 ## Usage
 
-1. Make sure you have [Tampermonkey](https://www.tampermonkey.net/) or other userscript managers installed in your browser.
-2. Install the userscript by file [predict.user.js](https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js).
+1. Make sure you have [TamperMonkey](https://www.tampermonkey.net/) or other UserScript managers installed in your browser.
+2. Install the UserScript by file [predict.user.js](https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js).
 
-## Develpment
+## Development
 
 ### Current model info
 
@@ -25,7 +25,7 @@ The data generator is [`generate.php`](generate.php), and the [`generate.py`](ge
 
 - generate.php
   - When there is no arguments passed to the file, generate a captcha, output the captcha answer to `stdout` and write image to file `captcha.jpg`.
-  - When there is one arguments (`tot`) passed to the file, the parameter must be an inteager.
+  - When there is one arguments (`tot`) passed to the file, the parameter must be an integer.
     The program will generate `tot` images, connect all image data directly and output to `stdout`.
     Each image is output in the following format:
     - First 2 bytes (`len`): the length of the image data
@@ -64,7 +64,7 @@ The detailed model is shown below:
 
 ### Predicting captcha
 
-The file [`predict.py`](predict.py) predicts the catpcha.
+The file [`predict.py`](predict.py) predicts the captcha.
 
 - When there is no arguments passed to the file, predict the image `captcha.jpg` and output the answer in the `stdout`.
 - When there is one argument (`port`) passed to the file, run an HTTP server on port `port`, and it only has one API.
