@@ -88,6 +88,8 @@ trainHistory = Model.fit(
     ],
 )
 
+Model.save("luoguCaptcha.keras")
+
 _, Axes = plt.subplots(1, 2, figsize=(15, 5))
 
 Axes[0].plot(trainHistory.history["accuracy"], label="Training accuracy")
@@ -108,5 +110,3 @@ plt.show()
 TestDataGenerator = GetDataGenerator(trainFiles, testIds)
 Loss, Accuracy = Model.evaluate(TestDataGenerator, steps=len(testIds))
 print("Test loss: %.4f, accuracy: %.2f%%" % (Loss, Accuracy * 100))
-
-Model.save("luoguCaptcha.keras")
