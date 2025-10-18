@@ -23,7 +23,7 @@ CHARS_PER_LABEL = 4
 
 def run_subprocess(generate_number, worker_id, result_list, progress_queue):
     """Runs the PHP script to generate captcha images."""
-    command = f"php generate.php {generate_number}"
+    command = f"php generate.php {generate_number} {worker_id}"
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
