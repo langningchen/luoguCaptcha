@@ -3,11 +3,12 @@
 # Math-optimized captcha training script
 
 import os
+import glob
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
-from datasets import load_dataset
+from tqdm import tqdm
 
 # 自动选择设备
 gpus = tf.config.list_physical_devices("GPU")
@@ -27,35 +28,57 @@ CHARS_PER_LABEL = 4
 IMG_HEIGHT, IMG_WIDTH = 35, 90
 EPOCHS = 15
 BATCH_SIZE = 256
-DATASET_PATH = "langningchen/luogu-captcha-dataset"
+TFRECORD_DIR = "data/luogu_captcha_tfrecord"
 
 
-# 数据加载与预处理
-def load_and_preprocess_data(dataset_path):
-    """Loads pre-processed dataset from Hugging Face Hub (zero CPU pre-processing on trainer)."""
+def parse_tfrecord(example_proto):
+    """Parses a single TFRecord example into image and label."""
+    feature_description = {
+        "image": tf.io.FixedLenFeature([], tf.string),
+        "label": tf.io.FixedLenFeature([CHARS_PER_LABEL], tf.int64),
+    }
+    example = tf.io.parse_single_example(example_proto, feature_description)
+    image = tf.io.decode_png(example["image"], channels=1)
+    image = tf.image.convert_image_dtype(image, tf.float32)  # Normalize to [0, 1]
+    label = example["label"]  # Shape: (4,)
+    return image, label
 
-    # 1. 在线加载 DatasetDict (直接获取预处理好的 train/test 分割)
-    dataset_dict = load_dataset(dataset_path)
 
-    train_ds_hf = dataset_dict["train"]
-    val_ds_hf = dataset_dict["test"]
+def load_and_preprocess_data(tfrecord_dir):
+    """Loads and preprocesses data from TFRecord files."""
+    # Get train and test TFRecord files
+    train_files = sorted(glob.glob(os.path.join(tfrecord_dir, "train_part_*.tfrecord")))
+    test_files = sorted(glob.glob(os.path.join(tfrecord_dir, "test_part_*.tfrecord")))
 
-    # 2. 转换为 tf.data.Dataset (无需任何 map/shuffle/num_proc)
-    train_ds = train_ds_hf.to_tf_dataset(
-        columns="image",
-        label_cols="label",  # 标签是 (4) 形状的整数
-        batch_size=BATCH_SIZE,
-        shuffle=True,  # 使用 to_tf_dataset 内置的 shuffle
+    if not train_files or not test_files:
+        raise ValueError(f"No TFRecord files found in {tfrecord_dir}")
+
+    print(f"Found {len(train_files)} train files and {len(test_files)} test files")
+
+    # Create tf.data datasets
+    train_ds = tf.data.TFRecordDataset(train_files, num_parallel_reads=tf.data.AUTOTUNE)
+    test_ds = tf.data.TFRecordDataset(test_files, num_parallel_reads=tf.data.AUTOTUNE)
+
+    # Parse TFRecords
+    train_ds = train_ds.map(parse_tfrecord, num_parallel_calls=tf.data.AUTOTUNE)
+    test_ds = test_ds.map(parse_tfrecord, num_parallel_calls=tf.data.AUTOTUNE)
+
+    # Shuffle and batch train dataset
+    train_ds = (
+        train_ds.shuffle(buffer_size=10000).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     )
-    val_ds = val_ds_hf.to_tf_dataset(
-        columns="image", label_cols="label", batch_size=BATCH_SIZE
-    )
+    test_ds = test_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
-    # 3. 使用 prefetch 隐藏 I/O 延迟
-    return train_ds.prefetch(tf.data.AUTOTUNE), val_ds.prefetch(tf.data.AUTOTUNE)
+    return train_ds, test_ds
 
 
-train_dataset, val_dataset = load_and_preprocess_data(DATASET_PATH)
+# Load data
+try:
+    train_dataset, val_dataset = load_and_preprocess_data(TFRECORD_DIR)
+    print("Data loaded successfully")
+except Exception as e:
+    print(f"Error loading TFRecord data: {e}")
+    exit(1)
 
 # 模型架构（数学优化，适合验证码识别）
 inputs = keras.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1), name="input")
