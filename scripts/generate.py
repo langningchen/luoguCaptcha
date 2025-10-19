@@ -1,17 +1,17 @@
 # Copyright (C) 2025 Langning Chen
-# 
+#
 # This file is part of luoguCaptcha.
-# 
+#
 # luoguCaptcha is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # luoguCaptcha is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with luoguCaptcha.  If not, see <https://www.gnu.org/licenses/>.
 
@@ -25,15 +25,79 @@ from datasets import Dataset, DatasetDict
 from tqdm import tqdm
 from queue import Queue, Empty
 import numpy as np
+import tensorflow as tf
+import math
 
 DATA_DIR = "data/luogu_captcha_dataset"
+TFRECORD_DIR = "data/luogu_captcha_tfrecord"
 CHAR_SIZE = 256
 CHARS_PER_LABEL = 4
+SAMPLES_PER_TFRECORD = 5000
+
+
+def _bytes_feature(value):
+    """Returns a bytes_list from a string / byte."""
+    if isinstance(value, type(tf.constant(0))):
+        value = value.numpy()  # BytesList won't unpack a string from an EagerTensor.
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
+def _int64_feature(value):
+    """Returns an int64_list from a bool / enum / int / uint."""
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
+
+
+def serialize_example(image, label):
+    """
+    Creates a tf.train.Example message ready to be written to a file.
+    """
+    try:
+        # Convert image to NumPy array if it's a list or other type
+        image_np = np.asarray(image, dtype=np.float32)
+
+        # Verify image shape (should be 35, 90, 1 or 35, 90)
+        if len(image_np.shape) == 3 and image_np.shape[-1] == 1:
+            image_np = image_np.squeeze(-1)  # Remove channel dimension for PIL
+        elif image_np.shape != (35, 90):
+            raise ValueError(
+                f"Unexpected image shape: {image_np.shape}, expected (35, 90, 1) or (35, 90)"
+            )
+
+        # Convert to uint8 for PIL
+        image_uint8 = (image_np * 255).astype(np.uint8)
+        image_pil = Image.fromarray(image_uint8, mode="L")
+
+        # Save to PNG bytes
+        buffer = BytesIO()
+        image_pil.save(buffer, format="PNG")
+        image_bytes = buffer.getvalue()
+
+        # Ensure label is a list of integers
+        if not isinstance(label, (list, np.ndarray)) or len(label) != CHARS_PER_LABEL:
+            raise ValueError(
+                f"Unexpected label format: {label}, expected list or array of length {CHARS_PER_LABEL}"
+            )
+        label_list = label if isinstance(label, list) else label.tolist()
+
+        # Validate that all label elements are integers
+        if not all(isinstance(x, (int, np.integer)) for x in label_list):
+            raise ValueError(f"Label contains non-integer values: {label_list}")
+
+        feature = {
+            "image": _bytes_feature(image_bytes),
+            "label": _int64_feature(label_list),
+        }
+        example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
+        return example_proto.SerializeToString()
+
+    except Exception as e:
+        print(f"Error in serialize_example: {e}")
+        raise
 
 
 def run_subprocess(generate_number, worker_id, result_list, progress_queue):
     """Runs the PHP script to generate captcha images."""
-    command = f"php generate.php {generate_number}"
+    command = f"php generate.php {generate_number} {worker_id}"
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -84,6 +148,44 @@ def run_subprocess(generate_number, worker_id, result_list, progress_queue):
     result_list.append({"image": images, "label": labels})
     process.stdout.close()
     process.wait()
+
+
+def write_tfrecords(dataset_dict, tfrecord_dir, samples_per_file=5000):
+    """
+    Writes Hugging Face DatasetDict (train/test) to TFRecord files.
+    Each file contains `samples_per_file` samples.
+    """
+    if not path.exists(tfrecord_dir):
+        makedirs(tfrecord_dir)
+
+    for split_name in ["train", "test"]:
+        dataset = dataset_dict[split_name]
+        num_samples = len(dataset)
+        num_files = math.ceil(num_samples / samples_per_file)
+
+        print(
+            f"Writing {split_name} split to TFRecord: {num_samples} samples -> {num_files} files"
+        )
+
+        with tqdm(total=num_samples, desc=f"Writing TFRecords ({split_name})") as pbar:
+            for file_idx in range(num_files):
+                start_idx = file_idx * samples_per_file
+                end_idx = min(start_idx + samples_per_file, num_samples)
+                filename = path.join(
+                    tfrecord_dir, f"{split_name}_part_{file_idx:04d}.tfrecord"
+                )
+
+                with tf.io.TFRecordWriter(filename) as writer:
+                    for i in range(start_idx, end_idx):
+                        try:
+                            image = dataset[i]["image"]  # Should be NumPy array or list
+                            label = dataset[i]["label"]  # Should be list or NumPy array
+                            example = serialize_example(image, label)
+                            writer.write(example)
+                            pbar.update(1)
+                        except Exception as e:
+                            print(f"Error writing sample {i} in {split_name}: {e}")
+                            continue
 
 
 if __name__ == "__main__":
@@ -162,10 +264,23 @@ if __name__ == "__main__":
     )
 
     print(f"Successfully generated {len(full_dataset)} images.")
-    print(f"Saving dataset to '{DATA_DIR}'...")
+    print(f"Saving Hugging Face dataset to '{DATA_DIR}'...")
 
     # Save the DatasetDict to disk
     dataset_dict.save_to_disk(DATA_DIR)
+    print("Hugging Face Dataset saved successfully.")
 
-    print("Dataset saved successfully.")
-    print(f"Run `python scripts/huggingface.py upload_dataset {DATA_DIR}` to upload.")
+    # === 新增：导出为 TFRecord 格式 ===
+    print(f"Saving dataset as TFRecord to '{TFRECORD_DIR}' (5000 samples per file)...")
+    try:
+        write_tfrecords(
+            dataset_dict, TFRECORD_DIR, samples_per_file=SAMPLES_PER_TFRECORD
+        )
+        print("TFRecord export completed.")
+    except Exception as e:
+        print(f"Failed to export TFRecords: {e}")
+
+    print(
+        f"Run `python scripts/huggingface.py upload_dataset {DATA_DIR}` to upload Hugging Face dataset."
+    )
+    print(f"TFRecord files are saved in '{TFRECORD_DIR}'.")
