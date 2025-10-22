@@ -2,4 +2,5 @@ captcha.jpg
 vendor/
 venv/
 data/
+models/
 .vscode
