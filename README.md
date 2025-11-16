@@ -2,87 +2,62 @@
 
 ## Introduction
 
-Recognize [Luogu Captcha](https://www.luogu.com.cn/lg4/captcha) with AI model
+Recognize [Luogu Captcha](https://www.luogu.com.cn/lg4/captcha) using an AI model.
 
 ## Usage
 
-1. Make sure you have [TamperMonkey](https://www.tampermonkey.net/) or other UserScript managers installed in your browser.
-2. Install the UserScript by file [predict.user.js](https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js).
+1. Ensure you have [TamperMonkey](https://www.tampermonkey.net/) or another UserScript manager installed in your browser.
+2. Install the UserScript by downloading the file [predict.user.js](https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js).
 
-## Development
+## Model and Dataset
 
-### Current model info
+The [Model](https://huggingface.co/langningchen/luogu-captcha-model) and [Dataset](https://huggingface.co/datasets/langningchen/luogu-captcha-dataset) are hosted on HuggingFace.
 
-- Training data is in the folder [`data`](data).
-  **Caution: the folder has 1000 files in it, be careful when opening it in your browser!**
-- Training history image:
+### Current Model Information
+
+- Training data is located in the [`data`](data) folder.
+  **Note: The folder contains 1000 files, so exercise caution when opening it in your browser!**
+- Training history visualization:
 ![Training history](trainHistory.png)
 
-### Data generator
+### Data Generator
 
-The [`font`](font) folder contains the font files for generate the images.
-The data generator is [`generate.php`](generate.php), and the [`generate.py`](generate.py) is a wrapper of the php file.
+The data generator consists of [`generate.php`](generate.php) and its Python wrapper [`generate.py`](generate.py).
 
-- generate.php
-  - When there is no arguments passed to the file, generate a captcha, output the captcha answer to `stdout` and write image to file `captcha.jpg`.
-  - When there is one arguments (`tot`) passed to the file, the parameter must be an integer.
-    The program will generate `tot` images, connect all image data directly and output to `stdout`.
-    Each image is output in the following format:
-    - First 2 bytes (`len`): the length of the image data
-    - Next 4 bytes: the captcha answer
-    - Next `len` bytes: the binary image data
-- generate.py
-  - Require three arguments: `BatchNumber` `WorkersCount` `BatchSize`.
-    It generates `BatchNumber` image batch files in the [`data`](data) directory, each file contains `BatchSize` images, working with `WorkersCount` subprocesses.
-    The batch files are named as `Data_([0-9]+)\.pkl`
+- `generate.php`
+  - Without arguments: Generates a captcha, outputs the captcha answer to `stdout`, and saves the image as `captcha.jpg`.
+  - With two arguments (`tot`, `seed`): Both arguments must be integers. The program generates `tot` images using the random seed `seed`, concatenates all image data, and outputs it to `stdout`. Each image is formatted as follows:
+    - First 2 bytes (`len`): Length of the image data
+    - Next 4 bytes: Captcha answer
+    - Next `len` bytes: Binary image data
+- `generate.py`
+  - Requires three arguments: `TotalImages` and `WorkersCount`.
+    It generates `TotalImages` image batch files in the [`data`](data) directory, formatted for HuggingFace (`data/luogu_captcha_dataset`) and TensorFlow (`data/luogu_captcha_tfrecord`).
 
-### Model training
+### Model Training
 
-The file [`train.py`](train.py) trains the model in `TensorFlow` with the data generated in the folder [`data`](data).
-The output model files is [`luoguCaptcha.keras`](luoguCaptcha.keras), the output train history file is [`trainHistory.png`](trainHistory.png).
+The script [`train.py`](train.py) trains the model using TensorFlow with data from the `data/luogu_captcha_tfrecord` folder. The trained model is saved as `models/luoguCaptcha.keras`.
 
-The detailed model is shown below:
-- Epochs: 8
-- Layers:
+### Predicting Captchas
 
-| Name   | Type           | Output shape                    |
-|:-------|:---------------|:--------------------------------|
-| input  | `input`        | (35, 90, 3)                     |
-| con1   | `Conv2D`       | (33, 88, 32)                    |
-| pol1   | `MaxPooling2D` | (16, 44, 32)                    |
-| con2   | `Conv2D`       | (14, 42, 64)                    |
-| pol2   | `MaxPooling2D` | (7, 21, 64)                     |
-| con3   | `Conv2D`       | (5, 19, 128)                    |
-| pol3   | `MaxPooling2D` | (2, 9, 128)                     |
-| flat   | `Flatten`      | (2304,)                         |
-| drp    | `Dropout`      | (2304,)                         |
-| des1   | `Dense`        | (1024,)                         |
-| des2   | `Dense`        | (`CharsPerLabel` * `CharSize`,) |
-| output | `Reshape`      | (`CharsPerLabel`, `CharSize`)   |
+The script [`predict.py`](predict.py) is used for captcha prediction.
 
-> In this model, the `CharsPerLabel` is 4, `CharSize` is 128
-
-### Predicting captcha
-
-The file [`predict.py`](predict.py) predicts the captcha.
-
-- When there is no arguments passed to the file, predict the image `captcha.jpg` and output the answer in the `stdout`.
-- When there is one argument (`port`) passed to the file, run an HTTP server on port `port`, and it only has one API.
+- With one argument (`port`): Starts an HTTP server on the specified port, providing a single API endpoint.
   - **URL**: `/`
   - **Request Method**: `POST`
-  - **Request Body**: A JSON as the following format
+  - **Request Body**: JSON in the following format:
     ```json
     {
         "image": "base64 encoded image file"
     }
     ```
-  - **Response Body**: A JSON as the following format
+  - **Response Body**: JSON in the following format:
     ```json
     {
         "prediction": "the captcha answer"
     }
     ```
-    
+
 ## License
 
 This project is licensed under the terms of the GNU General Public License v3.0.
