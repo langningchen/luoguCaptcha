@@ -62,7 +62,7 @@ threadpoolctl==3.6.0
 tqdm==4.67.1
 typing_extensions==4.15.0
 tzdata==2025.2
-urllib3==2.5.0
+urllib3==2.6.0
 Werkzeug==3.1.4
 wheel==0.45.1
 wrapt==1.17.3
