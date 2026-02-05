@@ -41,7 +41,7 @@ packaging==25.0
 pandas==2.3.3
 pillow==11.3.0
 propcache==0.4.1
-protobuf==6.32.1
+protobuf==6.33.5
 pyarrow==21.0.0
 Pygments==2.19.2
 python-dateutil==2.9.0.post0
