@@ -326,7 +326,7 @@ class WarmupCosineDecay(keras.optimizers.schedules.LearningRateSchedule):
         }
 
 
-lr_schedule = WarmupCosineDecay(d_model=D_MODEL, warmup_steps=2000, max_lr=5e-4)
+lr_schedule = WarmupCosineDecay(d_model=D_MODEL, warmup_steps=2000, max_lr=6e-4)
 
 model.compile(
     optimizer=keras.optimizers.AdamW(
