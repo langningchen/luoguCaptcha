@@ -48,11 +48,20 @@ else:
 CHAR_SIZE = 256
 CHARS_PER_LABEL = 4
 IMG_HEIGHT, IMG_WIDTH = 35, 90
-EPOCHS_STAGE1 = 6  # ResNet+Dense 阶段
-EPOCHS_STAGE2 = 10  # 冻结ResNet+Attention+BiLSTM 阶段
-EPOCHS_STAGE3 = 150  # 解冻全部模型阶段
-BATCH_SIZE = 256
+PATCH_SIZE = 5  # patch大小，要求能整除IMG_HEIGHT和IMG_WIDTH
+D_MODEL = 128  # Transformer嵌入维度 (256 -> 128)
+NUM_HEADS = 4  # 多头注意力头数 (8 -> 4)
+NUM_LAYERS = 4  # Transformer encoder层数 (6 -> 4)
+DFF = 256  # 前馈网络中间层维度 (512 -> 256)
+DROPOUT_RATE = 0.1
+EPOCHS = 150
+BATCH_SIZE = 128  # (256 -> 128)
 TFRECORD_DIR = "data/luogu_captcha_tfrecord"
+
+# 计算patch数量
+NUM_PATCHES_H = IMG_HEIGHT // PATCH_SIZE  # 35 / 5 = 7
+NUM_PATCHES_W = IMG_WIDTH // PATCH_SIZE   # 90 / 5 = 18
+NUM_PATCHES = NUM_PATCHES_H * NUM_PATCHES_W  # 7 * 18 = 126
 
 
 def parse_tfrecord(example_proto):
@@ -96,31 +105,181 @@ def load_and_preprocess_data(tfrecord_dir):
     return train_ds, test_ds
 
 
-def residual_block(x, filters, kernel_size=3, downsample=False):
-    """ResNet residual block with optional downsampling."""
-    shortcut = x
-    strides = 2 if downsample else 1
-    
-    # First conv layer
-    x = layers.Conv2D(filters, kernel_size, strides=strides, padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Activation("relu")(x)
-    
-    # Second conv layer
-    x = layers.Conv2D(filters, kernel_size, padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    
-    # Adjust shortcut if dimensions changed
-    if downsample or shortcut.shape[-1] != filters:
-        shortcut = layers.Conv2D(filters, 1, strides=strides, padding="same")(shortcut)
-        shortcut = layers.BatchNormalization()(shortcut)
-    
-    # Add residual connection
-    x = layers.Add()([x, shortcut])
-    x = layers.Activation("relu")(x)
-    
-    return x
+class PatchEmbedding(layers.Layer):
+    """将图像分割为patch并进行线性嵌入。"""
 
+    def __init__(self, patch_size, d_model, **kwargs):
+        super().__init__(**kwargs)
+        self.patch_size = patch_size
+        self.d_model = d_model
+        # 用卷积实现patch提取+线性投影
+        self.projection = layers.Conv2D(
+            d_model,
+            kernel_size=patch_size,
+            strides=patch_size,
+            padding="valid",
+        )
+
+    def call(self, x):
+        # x: (batch, H, W, 1)
+        x = self.projection(x)  # (batch, num_patches_h, num_patches_w, d_model)
+        batch_size = tf.shape(x)[0]
+        x = tf.reshape(x, (batch_size, -1, self.d_model))  # (batch, num_patches, d_model)
+        return x
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"patch_size": self.patch_size, "d_model": self.d_model})
+        return config
+
+
+class LearnedPositionalEncoding(layers.Layer):
+    """可学习的位置编码。"""
+
+    def __init__(self, num_positions, d_model, **kwargs):
+        super().__init__(**kwargs)
+        self.num_positions = num_positions
+        self.d_model = d_model
+
+    def build(self, input_shape):
+        self.pos_embedding = self.add_weight(
+            name="pos_embedding",
+            shape=(1, self.num_positions, self.d_model),
+            initializer="truncated_normal",
+            trainable=True,
+        )
+
+    def call(self, x):
+        return x + self.pos_embedding
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"num_positions": self.num_positions, "d_model": self.d_model})
+        return config
+
+
+class TransformerEncoderBlock(layers.Layer):
+    """单个Transformer Encoder块：Multi-Head Attention + Feed Forward + LayerNorm + Dropout。"""
+
+    def __init__(self, d_model, num_heads, dff, dropout_rate=0.1, **kwargs):
+        super().__init__(**kwargs)
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.dff = dff
+        self.dropout_rate = dropout_rate
+
+        self.mha = layers.MultiHeadAttention(
+            num_heads=num_heads, key_dim=d_model // num_heads, dropout=dropout_rate
+        )
+        self.ffn = keras.Sequential([
+            layers.Dense(dff, activation="gelu"),
+            layers.Dropout(dropout_rate),
+            layers.Dense(d_model),
+            layers.Dropout(dropout_rate),
+        ])
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = layers.Dropout(dropout_rate)
+
+    def call(self, x, training=None):
+        # Pre-norm架构
+        x_norm = self.layernorm1(x)
+        attn_output = self.mha(x_norm, x_norm, training=training)
+        attn_output = self.dropout1(attn_output, training=training)
+        x = x + attn_output
+
+        x_norm = self.layernorm2(x)
+        ffn_output = self.ffn(x_norm, training=training)
+        x = x + ffn_output
+
+        return x
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "d_model": self.d_model,
+            "num_heads": self.num_heads,
+            "dff": self.dff,
+            "dropout_rate": self.dropout_rate,
+        })
+        return config
+
+
+class CLSTokens(layers.Layer):
+    """可学习的CLS tokens，拼接到序列前面。"""
+
+    def __init__(self, num_tokens, d_model, **kwargs):
+        super().__init__(**kwargs)
+        self.num_tokens = num_tokens
+        self.d_model = d_model
+
+    def build(self, input_shape):
+        self.cls_tokens = self.add_weight(
+            name="cls_tokens",
+            shape=(1, self.num_tokens, self.d_model),
+            initializer="truncated_normal",
+            trainable=True,
+        )
+
+    def call(self, x):
+        batch_size = keras.ops.shape(x)[0]
+        cls_broadcast = keras.ops.broadcast_to(
+            self.cls_tokens, (batch_size, self.num_tokens, self.d_model)
+        )
+        return keras.ops.concatenate([cls_broadcast, x], axis=1)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"num_tokens": self.num_tokens, "d_model": self.d_model})
+        return config
+
+
+def build_vit_captcha_model():
+    """构建基于Vision Transformer (Encoder-Only) 的验证码识别模型。"""
+
+    inputs = keras.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1), name="input")
+
+    # Patch Embedding
+    x = PatchEmbedding(patch_size=PATCH_SIZE, d_model=D_MODEL, name="patch_embedding")(inputs)
+    # x: (batch, NUM_PATCHES, D_MODEL)
+
+    # 添加4个可学习的 CLS tokens 并拼接到序列前面
+    x = CLSTokens(num_tokens=CHARS_PER_LABEL, d_model=D_MODEL, name="cls_tokens")(x)
+    # x: (batch, 4 + NUM_PATCHES, D_MODEL)
+
+    # 位置编码 (覆盖 CLS tokens + patch tokens)
+    x = LearnedPositionalEncoding(
+        num_positions=CHARS_PER_LABEL + NUM_PATCHES,
+        d_model=D_MODEL,
+        name="positional_encoding",
+    )(x)
+    x = layers.Dropout(DROPOUT_RATE)(x)
+
+    # Transformer Encoder 层
+    for i in range(NUM_LAYERS):
+        x = TransformerEncoderBlock(
+            d_model=D_MODEL,
+            num_heads=NUM_HEADS,
+            dff=DFF,
+            dropout_rate=DROPOUT_RATE,
+            name=f"transformer_block_{i}",
+        )(x)
+
+    # 最终LayerNorm
+    x = layers.LayerNormalization(epsilon=1e-6, name="final_norm")(x)
+
+    # 取前4个token (CLS tokens) 作为4个字符的表示
+    x = layers.Lambda(lambda t: t[:, :CHARS_PER_LABEL, :], name="extract_cls")(x)
+    # x: (batch, 4, D_MODEL)
+
+    # 每个字符分类头
+    x = layers.Dense(DFF, activation="gelu", name="cls_head_dense")(x)
+    x = layers.Dropout(DROPOUT_RATE)(x)
+    outputs = layers.Dense(CHAR_SIZE, activation="softmax", name="cls_head_output")(x)
+    # outputs: (batch, 4, CHAR_SIZE)
+
+    model = keras.Model(inputs=inputs, outputs=outputs, name="LuoguCaptcha_ViT")
+    return model
 
 # Load data
 try:
@@ -130,174 +289,77 @@ except Exception as e:
     print(f"Error loading TFRecord data: {e}")
     exit(1)
 
-# ========== 阶段1: ResNet+Dense 训练20个epoch ==========
-print("\n" + "="*50)
-print("Stage 1: Training ResNet+Dense for 20 epochs")
-print("="*50 + "\n")
+# ========== 构建并训练 Vision Transformer 模型 ==========
+print("\n" + "=" * 50)
+print("Building Vision Transformer (Encoder-Only) Model")
+print(f"  Patch size: {PATCH_SIZE}x{PATCH_SIZE}")
+print(f"  Num patches: {NUM_PATCHES} ({NUM_PATCHES_H}x{NUM_PATCHES_W})")
+print(f"  D_model: {D_MODEL}, Heads: {NUM_HEADS}, Layers: {NUM_LAYERS}, DFF: {DFF}")
+print("=" * 50 + "\n")
 
-inputs = keras.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1), name="input")
+model = build_vit_captcha_model()
 
-# Initial conv layer
-x = layers.Conv2D(64, 3, padding="same")(inputs)
-x = layers.BatchNormalization()(x)
-x = layers.Activation("relu")(x)
+# Warmup + Cosine Decay 学习率调度
+class WarmupCosineDecay(keras.optimizers.schedules.LearningRateSchedule):
+    def __init__(self, d_model, warmup_steps=4000, max_lr=1e-3):
+        super().__init__()
+        self.d_model = d_model
+        self.warmup_steps = warmup_steps
+        self.max_lr = max_lr
 
-# ResNet blocks
-x = residual_block(x, 64, kernel_size=3)
-x = residual_block(x, 64, kernel_size=3)
-x = residual_block(x, 128, kernel_size=3, downsample=True)
-x = residual_block(x, 128, kernel_size=3)
-x = residual_block(x, 256, kernel_size=3, downsample=True)
-x = residual_block(x, 256, kernel_size=3)
+    def __call__(self, step):
+        step = tf.cast(step, tf.float32)
+        warmup_steps = tf.cast(self.warmup_steps, tf.float32)
+        # Linear warmup
+        warmup_lr = self.max_lr * (step / warmup_steps)
+        # Cosine decay after warmup
+        decay_lr = self.max_lr * 0.5 * (
+            1.0 + tf.cos(np.pi * (step - warmup_steps) / (50000.0 - warmup_steps))
+        )
+        return tf.where(step < warmup_steps, warmup_lr, decay_lr)
 
-# Dense layers
-x = layers.GlobalAveragePooling2D()(x)
-x = layers.Dense(512, activation="relu")(x)
-x = layers.Dropout(0.2)(x)
-x = layers.Dense(CHARS_PER_LABEL * CHAR_SIZE, activation="softmax")(x)
-outputs = layers.Reshape((CHARS_PER_LABEL, CHAR_SIZE))(x)
+    def get_config(self):
+        return {
+            "d_model": self.d_model,
+            "warmup_steps": self.warmup_steps,
+            "max_lr": self.max_lr,
+        }
 
-model = keras.Model(inputs=inputs, outputs=outputs, name="LuoguCaptcha_Stage1")
+
+lr_schedule = WarmupCosineDecay(d_model=D_MODEL, warmup_steps=2000, max_lr=5e-4)
+
 model.compile(
-    optimizer=keras.optimizers.Adam(learning_rate=0.002),
+    optimizer=keras.optimizers.AdamW(
+        learning_rate=lr_schedule,
+        weight_decay=1e-4,
+        beta_1=0.9,
+        beta_2=0.999,
+        epsilon=1e-8,
+    ),
     loss="sparse_categorical_crossentropy",
     metrics=["accuracy"],
 )
 model.summary()
 
-history1 = model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=EPOCHS_STAGE1,
-    callbacks=[
-        keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.2, patience=3, min_lr=1e-5
-        ),
-    ],
-)
-
-# ========== 阶段2: 冻结ResNet, 添加Attention+BiLSTM, 训练20个epoch ==========
-print("\n" + "="*50)
-print("Stage 2: Freezing ResNet, adding Attention+BiLSTM, training for 20 epochs")
-print("="*50 + "\n")
-
-# 1. 保存stage1模型的权重
-print("Saving Stage 1 weights...")
 os.makedirs("models", exist_ok=True)
-temp_model_path = "models/temp_stage1_resnet.weights.h5"
-model.save_weights(temp_model_path)
 
-# 2. 创建新模型，复用ResNet部分
-inputs_lstm = keras.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1), name="input")
-
-# Initial conv layer
-x = layers.Conv2D(64, 3, padding="same")(inputs_lstm)
-x = layers.BatchNormalization()(x)
-x = layers.Activation("relu")(x)
-
-# ResNet blocks (same as stage 1)
-x = residual_block(x, 64, kernel_size=3)
-x = residual_block(x, 64, kernel_size=3)
-x = residual_block(x, 128, kernel_size=3, downsample=True)
-x = residual_block(x, 128, kernel_size=3)
-x = residual_block(x, 256, kernel_size=3, downsample=True)
-x = residual_block(x, 256, kernel_size=3)
-
-# 保存ResNet输出的shape用于reshape
-resnet_output_shape = x.shape
-
-# 将CNN输出reshape为序列形式 (batch, time_steps, features)
-x = layers.Reshape((resnet_output_shape[1] * resnet_output_shape[2], resnet_output_shape[3]))(x)
-
-# Self-Attention mechanism
-attention_output = layers.MultiHeadAttention(
-    num_heads=4, 
-    key_dim=64,
-    dropout=0.1
-)(x, x)
-x = layers.LayerNormalization()(x + attention_output)
-
-# 双向LSTM层
-x = layers.Bidirectional(layers.LSTM(128, return_sequences=True))(x)
-x = layers.Dropout(0.2)(x)
-x = layers.Bidirectional(layers.LSTM(128, return_sequences=False))(x)
-x = layers.Dropout(0.2)(x)
-x = layers.Dense(CHARS_PER_LABEL * CHAR_SIZE, activation="softmax")(x)
-outputs_lstm = layers.Reshape((CHARS_PER_LABEL, CHAR_SIZE))(x)
-
-model_lstm = keras.Model(inputs=inputs_lstm, outputs=outputs_lstm, name="LuoguCaptcha_Stage2")
-
-print("Loading ResNet weights into Stage 2...")
-model_lstm.load_weights(temp_model_path, skip_mismatch=True)  # by_name=True
-
-# 4. 冻结ResNet部分
-print("Freezing ResNet layers...")
-frozen_count = 0
-for layer in model_lstm.layers:
-    if isinstance(layer, layers.Reshape):
-        break  # ResNet部分结束
-    if isinstance(layer, (layers.Conv2D, layers.BatchNormalization, layers.Add)):
-        layer.trainable = False
-        frozen_count += 1
-
-print(f"Frozen {frozen_count} ResNet layers.")
-
-# 5. 清理临时文件
-if os.path.exists(temp_model_path):
-    os.remove(temp_model_path)
-    print(f"Removed temporary file: {temp_model_path}")
-
-model_lstm.compile(
-    optimizer=keras.optimizers.Adam(learning_rate=0.002),
-    loss="sparse_categorical_crossentropy",
-    metrics=["accuracy"],
-)
-model_lstm.summary()
-
-history2 = model_lstm.fit(
+history = model.fit(
     train_dataset,
     validation_data=val_dataset,
-    epochs=EPOCHS_STAGE2,
-    callbacks=[
-        keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.2, patience=3, min_lr=1e-5
-        ),
-    ],
-)
-
-# ========== 阶段3: 解冻全部模型, 训练150个epoch ==========
-print("\n" + "="*50)
-print("Stage 3: Unfreezing all layers, training for 150 epochs")
-print("="*50 + "\n")
-
-# 解冻所有层
-for layer in model_lstm.layers:
-    layer.trainable = True
-
-# 使用较小的学习率
-model_lstm.compile(
-    optimizer=keras.optimizers.Adam(learning_rate=0.0001),
-    loss="sparse_categorical_crossentropy",
-    metrics=["accuracy"],
-)
-
-history3 = model_lstm.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=EPOCHS_STAGE3,
+    epochs=EPOCHS,
     callbacks=[
         keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=10, restore_best_weights=True
+            monitor="val_loss", patience=15, restore_best_weights=True
         ),
         keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.2, patience=5, min_lr=1e-6
+            monitor="val_loss", factor=0.5, patience=7, min_lr=1e-6
         ),
     ],
 )
 
-# 保存模型 (本地)
-final_model_path = "models/luoguCaptcha.ResNet+SelfAttention-BiLSTM.keras"
-model_lstm.save(final_model_path)
+# 保存模型
+final_model_path = "models/luoguCaptcha.ViT-EncoderOnly.keras"
+model.save(final_model_path)
 print(f"Model saved to {final_model_path}")
 
 # 提示上传
