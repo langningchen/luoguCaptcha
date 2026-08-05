@@ -1,63 +1,95 @@
 # Luogu Captcha Predict
 
-## Introduction
+[![Open training notebook in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/langningchen/luoguCaptcha/blob/main/notebooks/train_colab.ipynb)
 
-Recognize [Luogu Captcha](https://www.luogu.com.cn/lg4/captcha) using an AI model.
+Recognize Luogu's four-character captchas locally in the browser. The userscript uses TensorFlow.js and does not send captcha images to a prediction server.
 
-## Usage
+## Browser Usage
 
-1. Ensure you have [TamperMonkey](https://www.tampermonkey.net/) or another UserScript manager installed in your browser.
-2. Install the UserScript by downloading the file [predict.user.js](https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js).
+1. Install [Tampermonkey](https://www.tampermonkey.net/) or another userscript manager.
+2. Install [`predict.user.js`](https://github.com/langningchen/luoguCaptcha/raw/refs/heads/main/predict.user.js).
+3. Open a Luogu page containing a captcha. The model is embedded in the userscript and is available without a model-file download.
 
-## Model and Dataset
+The canonical browser artifacts are published in [`langningchen/luogu-captcha-model`](https://huggingface.co/langningchen/luogu-captcha-model/tree/main/tfjs). The userscript embeds the validated TensorFlow.js topology and shard directly, so it does not request model files from Hugging Face at runtime. TensorFlow.js itself is loaded through the userscript manager's `@require` dependency.
 
-The [Model](https://huggingface.co/langningchen/luogu-captcha-model) and [Dataset](https://huggingface.co/datasets/langningchen/luogu-captcha-dataset) are hosted on HuggingFace.
+## Browser Model
 
-### Current Model Information
+The browser model is designed around the real captcha generator and the fixed `90x35` input:
 
-- Training data is located in the [`data`](data) folder.
-  **Note: The folder contains 1000 files, so exercise caution when opening it in your browser!**
-- Training history visualization:
-![Training history](trainHistory.png)
+- RGB input, matching the colored training data
+- 35 case-insensitive output classes instead of a 256-class ASCII head
+- standard convolution blocks and a 512-unit dense head, prioritizing accuracy
+- no recurrent, attention, or custom layers, keeping TensorFlow.js compatibility simple
+- exact four-character accuracy as the checkpoint metric
+- validated post-training quantization for browser delivery
 
-### Data Generator
+The network contains 3,245,804 parameters: about 13.0 MB in FP32, 6.5 MB with uint16 weights, or 3.25 MB with uint8 weights, before the small TensorFlow.js model manifest. The published mixed-precision browser artifact is 3,279,923 bytes including its manifest and metadata. The generated userscript is about 4.37 MB because Base64 adds transport overhead, and decodes the 3,249,784-byte shard in memory. The exporter tries uint8 first and keeps it only when both character and full-captcha correct counts do not decrease on the 10,000-image validation split; otherwise it selectively restores sensitive tensors to uint16 before falling back to full uint16 or FP32. Uppercase and lowercase samples share one target class because Luogu verifies captchas case-insensitively; the browser outputs lowercase letters.
 
-The data generator consists of [`generate.php`](generate.php) and its Python wrapper [`generate.py`](generate.py).
+To regenerate the embedded block after publishing a replacement model, run:
 
-- `generate.php`
-  - Without arguments: Generates a captcha, outputs the captcha answer to `stdout`, and saves the image as `captcha.jpg`.
-  - With two arguments (`tot`, `seed`): Both arguments must be integers. The program generates `tot` images using the random seed `seed`, concatenates all image data, and outputs it to `stdout`. Each image is formatted as follows:
-    - First 2 bytes (`len`): Length of the image data
-    - Next 4 bytes: Captcha answer
-    - Next `len` bytes: Binary image data
-- `generate.py`
-  - Requires three arguments: `TotalImages` and `WorkersCount`.
-    It generates `TotalImages` image batch files in the [`data`](data) directory, formatted for HuggingFace (`data/luogu_captcha_dataset`) and TensorFlow (`data/luogu_captcha_tfrecord`).
+```bash
+python scripts/embed_tfjs_model.py /path/to/tfjs \
+  --revision <hugging-face-commit>
+```
 
-### Model Training
+The same checkpoint is also exported to ONNX with a dynamic batch dimension and NHWC float32 input shaped `[N, 35, 90, 3]`. Both FP32 and dynamic INT8 files are validated with ONNX Runtime, and `metadata.json` identifies the recommended artifact.
 
-The script [`train.py`](train.py) trains the model using TensorFlow with data from the `data/luogu_captcha_tfrecord` folder. The trained model is saved as `models/luoguCaptcha.keras`.
+## Colab Training
 
-### Predicting Captchas
+The dataset is [`langningchen/luogu-captcha-dataset-colored`](https://huggingface.co/datasets/langningchen/luogu-captcha-dataset-colored): 500,000 colored captcha images with string labels.
 
-The script [`predict.py`](predict.py) is used for captcha prediction.
+Open [`notebooks/train_colab.ipynb`](notebooks/train_colab.ipynb), select a T4 GPU runtime, and run all cells. The notebook:
 
-- With one argument (`port`): Starts an HTTP server on the specified port, providing a single API endpoint.
-  - **URL**: `/`
-  - **Request Method**: `POST`
-  - **Request Body**: JSON in the following format:
-    ```json
-    {
-        "image": "base64 encoded image file"
-    }
-    ```
-  - **Response Body**: JSON in the following format:
-    ```json
-    {
-        "prediction": "the captcha answer"
-    }
-    ```
+1. downloads and splits the Hugging Face dataset;
+2. decodes the JPEGs once into a local uint8 TensorFlow cache, then trains with mixed precision and adaptive learning-rate reduction;
+3. keeps the checkpoint with the best full-captcha validation accuracy;
+4. exports the smallest TensorFlow.js artifact that shows no validation-accuracy loss;
+5. exports and validates FP32 and dynamic INT8 ONNX artifacts;
+6. optionally publishes the artifacts when an `HF_TOKEN` Colab secret is present.
+
+The same pipeline can be run from a GPU machine:
+
+```bash
+python scripts/train.py \
+  --epochs 30 \
+  --batch-size 512 \
+  --validation-size 10000 \
+  --output-dir models/browser
+```
+
+For a short integration test, add `--max-train-samples 4096 --epochs 1`.
+
+## Generated Artifacts
+
+```text
+models/browser/
+|-- luogu-captcha-mobile.h5
+|-- metadata.json
+|-- training.csv
+|-- onnx/
+|   |-- luogu-captcha-fp32.onnx
+|   `-- luogu-captcha-int8.onnx
+`-- tfjs/
+    |-- model.json
+    |-- group1-shard*.bin
+    `-- metadata.json
+```
+
+The userscript and `metadata.json` must use the same alphabet and input preprocessing. The exported metadata records the training constants, and the same values are mirrored in [`predict.user.js`](predict.user.js).
+
+Run the ONNX model from Python with:
+
+```bash
+python scripts/predict_onnx.py captcha.jpg \
+  --model models/browser/onnx/luogu-captcha-fp32.onnx
+```
+
+Use `luogu-captcha-int8.onnx` instead when `metadata.json` marks INT8 as the selected ONNX artifact.
+
+## Legacy Tools
+
+The scripts under [`scripts/`](scripts/) for generating TFRecords, server-side Keras prediction, and manually testing fetched captchas remain available for the older models. The browser model uses the colored Hugging Face dataset directly and does not require those TFRecords.
 
 ## License
 
-This project is licensed under the terms of the GNU General Public License v3.0.
+This project is licensed under the GNU General Public License v3.0. The colored dataset and published model repository declare AGPL-3.0 licensing.

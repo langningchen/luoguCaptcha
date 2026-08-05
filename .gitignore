@@ -1,6 +1,8 @@
 captcha.jpg
 vendor/
 venv*/
+__pycache__/
+*.py[cod]
 data/
 models/
 .vscode
