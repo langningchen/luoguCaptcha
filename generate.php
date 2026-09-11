@@ -2,10 +2,12 @@
 
 require 'vendor/autoload.php';
 
+use Gregwar\Captcha\PhraseBuilder;
 use Gregwar\Captcha\CaptchaBuilder;
 
 if ($argc == 1) {
-  $builder = new CaptchaBuilder(4);
+  $phraseBuilder = new PhraseBuilder(4);
+  $builder = new CaptchaBuilder(null, $phraseBuilder);
   $builder->build($width = 90, $height = 35);
   print($builder->getPhrase());
   $builder->save('captcha.jpg');
