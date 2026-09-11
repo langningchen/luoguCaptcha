@@ -16,7 +16,8 @@ if ($argc == 1) {
   mt_srand(microtime(true) + intval($argv[2]) + getmypid());
   $ostream = fopen("php://stdout", "wb");
   for ($i = 0; $i < $tot; ++$i) {
-    $builder = new CaptchaBuilder(4);
+    $phraseBuilder = new PhraseBuilder(4);
+    $builder = new CaptchaBuilder(null, $phraseBuilder);
     $builder->build($width = 90, $height = 35);
     $phrase = $builder->getPhrase();
     $img = $builder->get();
