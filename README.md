@@ -36,7 +36,7 @@ The same checkpoint is also exported to ONNX with a dynamic batch dimension and 
 
 ## Colab Training
 
-The dataset is [`langningchen/luogu-captcha-dataset-colored`](https://huggingface.co/datasets/langningchen/luogu-captcha-dataset-colored): 500,000 colored captcha images with string labels.
+The dataset is [`langningchen/luogu-captcha-dataset`](https://huggingface.co/datasets/langningchen/luogu-captcha-dataset): 500,000 colored captcha images with string labels.
 
 Open [`notebooks/train_colab.ipynb`](notebooks/train_colab.ipynb), select a T4 GPU runtime, and run all cells. The notebook:
 

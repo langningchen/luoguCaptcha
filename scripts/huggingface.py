@@ -12,7 +12,7 @@ from datasets import load_from_disk
 from huggingface_hub import HfApi
 
 
-DATASET_REPO_ID = "langningchen/luogu-captcha-dataset-colored"
+DATASET_REPO_ID = "langningchen/luogu-captcha-dataset"
 MODEL_REPO_ID = "langningchen/luogu-captcha-model"
 
 

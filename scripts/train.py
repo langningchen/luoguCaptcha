@@ -26,7 +26,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 
-DATASET_REPO_ID = "langningchen/luogu-captcha-dataset-colored"
+DATASET_REPO_ID = "langningchen/luogu-captcha-dataset"
 # Keep the source encoding stable so an existing decoded-image cache remains
 # reusable. The model target is case-insensitive because Luogu's verifier is.
 ALPHABET = "abcdefghijklmnpqrstuvwxyz123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
