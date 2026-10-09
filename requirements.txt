@@ -31,7 +31,7 @@ markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
 ml_dtypes==0.5.3
-multidict==6.7.0
+multidict==6.9.1
 multiprocess==0.70.16
 namex==0.1.0
 numpy==2.3.3
